@@ -13,7 +13,9 @@ on:
     paths:
       - 'pdf/**.pdf'
       - '.github/workflows/pdf-slideshow.yml'
-      - '.github/scripts/**.sh'
+      # Surveille maintenant le script unifié et le script d'index
+      - '.github/scripts/process_pdf.sh'
+      - '.github/scripts/generate_main_index.sh'
 
 permissions:
   contents: read
@@ -39,16 +41,15 @@ jobs:
       # --- Configuration du Cache ---
       - name: Configure Cache Path
         id: cache-path
-        run: echo "path=build" >> $GITHUB_OUTPUT # Dossier à mettre en cache
+        run: echo "path=build" >> $GITHUB_OUTPUT
 
       - name: Restore Build Cache
         id: cache-restore
         uses: actions/cache/restore@v4
         with:
           path: ${{ steps.cache-path.outputs.path }}
-          # Clé basée sur le runner et un hash des scripts (pour invalider si les scripts changent)
-          key: ${{ runner.os }}-build-${{ hashFiles('.github/scripts/**.sh') }}
-          # Clés de restauration (facultatif, pour utiliser un cache légèrement plus ancien)
+          # Clé basée aussi sur le hash du script unifié
+          key: ${{ runner.os }}-build-${{ hashFiles('.github/scripts/process_pdf.sh', '.github/scripts/generate_main_index.sh') }}
           restore-keys: |
             ${{ runner.os }}-build-
 
@@ -57,23 +58,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y poppler-utils pngquant curl coreutils findutils
 
+      # Rendre les scripts (actuels) exécutables
       - name: Make scripts executable
-        run: chmod +x .github/scripts/*.sh
+        run: chmod +x .github/scripts/process_pdf.sh .github/scripts/generate_main_index.sh
 
       - name: Prepare Build Directory and Copy Assets
-        # Crée la structure même si le cache est restauré (au cas où)
         run: |
           mkdir -p build/dist build/plugin
           cp -r reveal.js/dist/* build/dist/
           cp -r reveal.js/plugin/* build/plugin/
           echo "Build directory structure created/ensured and Reveal.js assets copied."
 
-      # === Logique conditionnelle de traitement ===
+      # === Logique conditionnelle de traitement avec le script unifié ===
 
+      # Cas 1: Traitement d'une URL via workflow_dispatch
       - name: Process PDF URL (if specified)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.pdfUrl != ''
-        run: .github/scripts/process_pdf_url.sh "${{ github.event.inputs.pdfUrl }}" "build"
+        # Appel du script unifié avec l'option -u
+        run: .github/scripts/process_pdf.sh -u "${{ github.event.inputs.pdfUrl }}" -b "build"
 
+      # Cas 2: Traitement des fichiers locaux du dossier pdf/ sur push
       - name: Process Local PDF Files (on push)
         if: github.event_name == 'push'
         run: |
@@ -87,30 +91,26 @@ jobs:
             echo "Found ${#files[@]} PDF file(s) in $PDF_DIR. Processing..."
             for pdf_file in "${files[@]}"; do
               echo "--- Processing '$pdf_file' ---"
-              # Utiliser des guillemets autour du nom de fichier
-              .github/scripts/process_local_pdf.sh "$pdf_file" "$BUILD_DIR"
+              # Appel du script unifié avec l'option -f
+              .github/scripts/process_pdf.sh -f "$pdf_file" -b "$BUILD_DIR"
               echo "--- Finished '$pdf_file' ---"
             done
           fi
 
       # === Fin de la logique conditionnelle ===
 
+      # Générer l'index principal
       - name: Generate Main Index HTML
         run: .github/scripts/generate_main_index.sh "build"
 
       # --- Sauvegarde du Cache ---
-      # Sauvegarde seulement si quelque chose a changé (ou si nouveau)
       - name: Save Build Cache
         uses: actions/cache/save@v4
-        # Condition: exécute seulement si le cache n'a pas été restauré exactement (cache-hit est faux)
-        # ou si la clé de restauration exacte n'a pas été trouvée.
-        # Ceci évite de sauvegarder si rien n'a changé et que le cache était parfait.
-        # Note: La logique exacte peut varier selon les besoins précis de mise à jour du cache.
-        # Sauvegarder toujours est plus simple mais peut consommer plus de stockage/temps.
-        # if: steps.cache-restore.outputs.cache-hit != 'true' # Option pour ne sauvegarder que si nouveau/modifié
+        # if: steps.cache-restore.outputs.cache-hit != 'true' # Optionnel: Sauver seulement si modifié
         with:
           path: ${{ steps.cache-path.outputs.path }}
-          key: ${{ steps.cache-restore.outputs.cache-primary-key || format('{0}-build-{1}', runner.os, hashFiles('.github/scripts/**.sh')) }} # Utilise la clé restaurée si possible
+          # Utilise la clé primaire restaurée ou la clé actuelle si nouvelle
+          key: ${{ steps.cache-restore.outputs.cache-primary-key || format('{0}-build-{1}', runner.os, hashFiles('.github/scripts/process_pdf.sh', '.github/scripts/generate_main_index.sh')) }}
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
