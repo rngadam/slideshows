@@ -21,11 +21,6 @@ permissions:
   pages: write
   id-token: write
 
-# Définit le nom de l'image Docker à utiliser
-# REMPLACEZ <votre-user-ou-orga>/<votre-repo> par les bonnes valeurs
-env:
-  DOCKER_IMAGE: ghcr.io/${{ github.repository }}:latest
-
 jobs:
   build:
     name: Build PDF Slideshow(s) inside Docker
@@ -33,7 +28,7 @@ jobs:
 
     # === Utilisation du conteneur Docker ===
     container:
-      image: ${{ env.DOCKER_IMAGE }}
+      image: ghcr.io/${{ github.repository }}:latest
       # Les volumes sont généralement gérés automatiquement pour l'espace de travail
       # options: --user root # Si des problèmes de permission surviennent
 
