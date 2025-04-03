@@ -1,22 +1,19 @@
 name: Generate Slideshow from PDF URL or Local Folder
 
 on:
-  # Option 1: Déclenchement manuel avec une URL
   workflow_dispatch:
     inputs:
       pdfUrl:
         description: 'URL of the PDF file to convert (laisser vide si traitement local)'
-        required: false # Non requis si on veut juste déclencher pour le local via l'UI (mais pas standard)
+        required: false
         type: string
-
-  # Option 2: Déclenchement sur push dans le dossier pdf/
   push:
     branches:
-      - main # Ou votre branche par défaut
+      - main
     paths:
-      - 'pdf/**.pdf' # Surveille les fichiers PDF dans le dossier pdf/
-      - '.github/workflows/pdf-slideshow.yml' # Se redéclenche si le workflow change
-      - '.github/scripts/**.sh' # Se redéclenche si les scripts changent
+      - 'pdf/**.pdf'
+      - '.github/workflows/pdf-slideshow.yml'
+      - '.github/scripts/**.sh'
 
 permissions:
   contents: read
@@ -30,7 +27,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        # Fetch all history so Scripts Changed step works correctly
         with:
           fetch-depth: 0
 
@@ -40,60 +36,82 @@ jobs:
           repository: hakimel/reveal.js
           path: reveal.js
 
+      # --- Configuration du Cache ---
+      - name: Configure Cache Path
+        id: cache-path
+        run: echo "path=build" >> $GITHUB_OUTPUT # Dossier à mettre en cache
+
+      - name: Restore Build Cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.cache-path.outputs.path }}
+          # Clé basée sur le runner et un hash des scripts (pour invalider si les scripts changent)
+          key: ${{ runner.os }}-build-${{ hashFiles('.github/scripts/**.sh') }}
+          # Clés de restauration (facultatif, pour utiliser un cache légèrement plus ancien)
+          restore-keys: |
+            ${{ runner.os }}-build-
+
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y poppler-utils pngquant curl coreutils findutils
 
-      # Rendre TOUS les scripts exécutables
       - name: Make scripts executable
         run: chmod +x .github/scripts/*.sh
 
       - name: Prepare Build Directory and Copy Assets
+        # Crée la structure même si le cache est restauré (au cas où)
         run: |
           mkdir -p build/dist build/plugin
           cp -r reveal.js/dist/* build/dist/
           cp -r reveal.js/plugin/* build/plugin/
-          echo "Build directory structure created and Reveal.js assets copied."
+          echo "Build directory structure created/ensured and Reveal.js assets copied."
 
-      # === Logique conditionnelle ===
+      # === Logique conditionnelle de traitement ===
 
-      # Cas 1: Traitement d'une URL via workflow_dispatch
       - name: Process PDF URL (if specified)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.pdfUrl != ''
         run: .github/scripts/process_pdf_url.sh "${{ github.event.inputs.pdfUrl }}" "build"
 
-      # Cas 2: Traitement des fichiers locaux du dossier pdf/ sur push
-      # Note: Ceci traitera TOUS les PDF dans pdf/ à chaque push pertinent.
       - name: Process Local PDF Files (on push)
         if: github.event_name == 'push'
         run: |
-          PDF_DIR="pdf" # Nom du dossier contenant les PDFs locaux
+          PDF_DIR="pdf"
           BUILD_DIR="build"
-          shopt -s nullglob # Empêche l'erreur si aucun fichier .pdf n'est trouvé
+          shopt -s nullglob
           files=("$PDF_DIR"/*.pdf)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No PDF files found in $PDF_DIR. Nothing to process."
           else
             echo "Found ${#files[@]} PDF file(s) in $PDF_DIR. Processing..."
             for pdf_file in "${files[@]}"; do
-              echo "--- Processing $pdf_file ---"
-              # Appelle le script pour chaque fichier PDF local trouvé
+              echo "--- Processing '$pdf_file' ---"
+              # Utiliser des guillemets autour du nom de fichier
               .github/scripts/process_local_pdf.sh "$pdf_file" "$BUILD_DIR"
-              echo "--- Finished $pdf_file ---"
+              echo "--- Finished '$pdf_file' ---"
             done
           fi
 
-      # Note: Si déclenché par workflow_dispatch SANS URL, aucun des deux blocs précédents ne s'exécute.
-      # On pourrait ajouter un 3ème cas pour traiter le local si dispatch + URL vide, mais c'est moins intuitif.
-
       # === Fin de la logique conditionnelle ===
 
-      # Générer l'index principal DANS TOUS LES CAS (après traitement URL ou local)
       - name: Generate Main Index HTML
         run: .github/scripts/generate_main_index.sh "build"
 
-      # Télécharger l'artefact pour GitHub Pages
+      # --- Sauvegarde du Cache ---
+      # Sauvegarde seulement si quelque chose a changé (ou si nouveau)
+      - name: Save Build Cache
+        uses: actions/cache/save@v4
+        # Condition: exécute seulement si le cache n'a pas été restauré exactement (cache-hit est faux)
+        # ou si la clé de restauration exacte n'a pas été trouvée.
+        # Ceci évite de sauvegarder si rien n'a changé et que le cache était parfait.
+        # Note: La logique exacte peut varier selon les besoins précis de mise à jour du cache.
+        # Sauvegarder toujours est plus simple mais peut consommer plus de stockage/temps.
+        # if: steps.cache-restore.outputs.cache-hit != 'true' # Option pour ne sauvegarder que si nouveau/modifié
+        with:
+          path: ${{ steps.cache-path.outputs.path }}
+          key: ${{ steps.cache-restore.outputs.cache-primary-key || format('{0}-build-{1}', runner.os, hashFiles('.github/scripts/**.sh')) }} # Utilise la clé restaurée si possible
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
