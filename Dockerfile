@@ -12,6 +12,7 @@ RUN apk update && \
         ca-certificates \
         git \
         bash \
+        tar \
     && \
     rm -rf /var/cache/apk/*
 
