@@ -1,0 +1,58 @@
+name: Build and Push Docker Image
+
+on:
+  # Déclencher sur push vers la branche principale si Dockerfile ou scripts changent
+  push:
+    branches:
+      - main # Ou votre branche par défaut
+    paths:
+      - 'Dockerfile'
+      - '.github/scripts/**.sh'
+  # Permettre le déclenchement manuel
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    name: Build and Push to GHCR
+    runs-on: ubuntu-latest
+    # Permissions nécessaires pour pousser vers ghcr.io
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          # Utilise le token GITHUB_TOKEN généré automatiquement pour l'authentification
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # L'image sera nommée ghcr.io/<votre-user-ou-orga>/<votre-repo>
+          images: ghcr.io/${{ github.repository }}
+          # Tags: 'latest' et le hash court du commit
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: . # Utilise le Dockerfile à la racine
+          file: ./Dockerfile
+          push: true # Pousse l'image vers ghcr.io
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha # Utilise le cache GitHub Actions pour accélérer les builds
+          cache-to: type=gha,mode=max
