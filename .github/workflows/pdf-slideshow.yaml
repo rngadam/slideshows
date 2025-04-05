@@ -158,7 +158,8 @@ jobs:
           fi
       - name: PDF Already Cached
         if: steps.cache-restore-pdf.outputs.cache-hit == 'true' && !(github.event.inputs.reprocess == 'true' && matrix.source_type == 'file')
-        run: echo "Skipping processing for ${{ matrix.pdf_basename }} (Hash: ${{ matrix.pdf_hash }}) - Cache hit."
+        run: |
+          echo "Skipping processing for ${{ matrix.pdf_basename }} (Hash: ${{ matrix.pdf_hash }}) - Cache hit."
 
       # -- Sauvegarde Cache par PDF --
       - name: Save PDF Cache (${{ matrix.pdf_hash }})
