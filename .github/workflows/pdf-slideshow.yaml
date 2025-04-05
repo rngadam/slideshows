@@ -89,12 +89,14 @@ jobs:
 
       # Étape 3: Générer l'index principal
       - name: Generate Main Index HTML
+        if: steps.prep_matrix.outputs.found_pdfs == 'true'
         # Exécute le script DANS le conteneur
         run: /app/scripts/generate_main_index.sh "build"
         shell: bash # Utilise bash
 
       # --- Sauvegarde du Cache ---
       - name: Save Build Cache
+        if: steps.prep_matrix.outputs.found_pdfs == 'true'
         uses: actions/cache/save@v4
         # Sauvegarde toujours pour simplifier (si rien n'a changé, le cache sera identique)
         with:
@@ -103,6 +105,7 @@ jobs:
 
       # Étape 4: Upload de l'artefact pour Pages
       - name: Upload artifact for Pages
+        if: steps.prep_matrix.outputs.found_pdfs == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./build # Chemin relatif à /github/workspace
