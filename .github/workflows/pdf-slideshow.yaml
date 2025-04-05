@@ -102,6 +102,7 @@ jobs:
               echo "--- Finished '$pdf_file' ---"
             done
           fi
+        shell: bash
 
       # === Fin de la logique conditionnelle ===
 
