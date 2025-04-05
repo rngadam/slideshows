@@ -13,6 +13,7 @@ RUN apk update && \
         git \
         bash \
         tar \
+        jq \
     && \
     rm -rf /var/cache/apk/*
 
