@@ -84,8 +84,11 @@ jobs:
         if: steps.prep_matrix.outputs.found_pdfs == 'true'
         # Exécute le script DANS le conteneur
         # Passe la matrice compactée et le dossier build en arguments
-        run: /app/scripts/process_matrix_items.sh '${{ steps.prep_matrix.outputs.matrix }}' 'build'
+        run: /app/scripts/process_matrix_items.sh 'build'
         shell: bash # Utilise bash
+        env:
+          # Passe la matrice JSON via une variable d'environnement
+          PDF_MATRIX_JSON: ${{ steps.prep_matrix.outputs.matrix }}
 
       # Étape 3: Générer l'index principal
       - name: Generate Main Index HTML
