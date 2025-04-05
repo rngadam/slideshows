@@ -21,6 +21,12 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  # Groupe les exécutions par nom de workflow ET référence Git (branche ou tag)
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Annule les exécutions précédentes dans le même groupe qui sont en cours
+  cancel-in-progress: true
+
 jobs:
   build_and_deploy: # Un seul job pour tout faire
     name: Build PDF Slideshow(s) and Deploy
