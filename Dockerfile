@@ -28,7 +28,7 @@ RUN chmod +x /app/scripts/*.sh
 
 # Définir le script principal comme point d'entrée
 # Les arguments passés à `docker run <image> ...` seront ajoutés après cette commande.
-ENTRYPOINT ["/app/scripts/process_pdf.sh"]
+#ENTRYPOINT ["/app/scripts/process_pdf.sh"]
 
 # Il n'est pas nécessaire d'avoir un CMD ici, car l'ENTRYPOINT prendra les arguments
 # de `docker run`. Le script process_pdf.sh gère déjà le cas sans arguments.
