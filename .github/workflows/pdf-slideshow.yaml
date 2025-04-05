@@ -21,11 +21,6 @@ permissions:
   pages: write
   id-token: write
 
-env:
-  # Définit le nom de l'image Docker à utiliser
-  # Assurez-vous que le nom du dépôt est correct
-  DOCKER_IMAGE: ghcr.io/${{ github.repository }}:latest
-
 jobs:
   build_and_deploy: # Un seul job pour tout faire
     name: Build PDF Slideshow(s) and Deploy
@@ -33,7 +28,7 @@ jobs:
 
     # Utilise le conteneur Docker défini dans env
     container:
-      image: ${{ env.DOCKER_IMAGE }}
+      image: ghcr.io/${{ github.repository }}:latest
 
     steps:
       - name: Checkout Repository
