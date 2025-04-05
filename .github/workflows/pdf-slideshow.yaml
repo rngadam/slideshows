@@ -1,239 +1,120 @@
-name: Generate Slideshow from PDF (using Docker & Matrix Cache)
+name: Generate Slideshow from PDF (using Docker)
 
 on:
   workflow_dispatch:
     inputs:
       pdfUrl:
-        description: 'URL of the PDF file to convert (laisser vide pour traiter le dossier local)'
+        description: 'URL of the PDF file to convert (laisser vide si traitement local)'
         required: false
         type: string
-      reprocess:
-        description: 'Forcer le retraitement des fichiers locaux du dossier pdf/ (ignore le cache)'
-        required: false
-        type: boolean
-        default: false
   push:
     branches:
       - main
     paths:
       - 'pdf/**.pdf'
-      # Le déclenchement se fait maintenant via push sur pdf/ ou dispatch manuel
-      # Les changements de workflow/scripts ne redéclenchent plus ceci directement
+      - '.github/workflows/pdf-slideshow.yml'
+      - '.github/scripts/**.sh' # Surveille tous les scripts
+      - 'Dockerfile' # Se redéclenche si Dockerfile change
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
+env:
+  # Définit le nom de l'image Docker à utiliser
+  # Assurez-vous que le nom du dépôt est correct
+  DOCKER_IMAGE: ghcr.io/${{ github.repository }}:latest
+
 jobs:
-  # --- Job 1: Identifier les PDFs à traiter et calculer leurs hashes ---
-  identify_pdfs:
-    name: Identify PDFs to Process
+  build_and_deploy: # Un seul job pour tout faire
+    name: Build PDF Slideshow(s) and Deploy
     runs-on: ubuntu-latest
-    outputs:
-      # La sortie sera une chaîne JSON contenant la liste des PDFs et leurs infos
-      matrix: ${{ steps.set_matrix.outputs.matrix }}
-      # Indique si des PDFs ont été trouvés
-      found_pdfs: ${{ steps.set_matrix.outputs.found_pdfs }}
+
+    # Utilise le conteneur Docker défini dans env
+    container:
+      image: ${{ env.DOCKER_IMAGE }}
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Install jq (pour manipuler JSON)
-        run: sudo apt-get update && sudo apt-get install -y jq curl coreutils findutils
-
-      - name: Generate PDF processing matrix
-        id: set_matrix
-        run: |
-          matrix_json="[]" # Initialise un tableau JSON vide
-          found_pdfs="false"
-
-          # --- Cas 1: URL fournie via workflow_dispatch ---
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.pdfUrl }}" ]]; then
-            echo "Processing URL: ${{ github.event.inputs.pdfUrl }}"
-            PDF_URL="${{ github.event.inputs.pdfUrl }}"
-            TMP_DIR=$(mktemp -d)
-            PDF_TMP_PATH="$TMP_DIR/downloaded.pdf"
-
-            # Télécharger (avec gestion d'erreur basique)
-            if curl -L -o "$PDF_TMP_PATH" -f "$PDF_URL"; then
-              PDF_HASH=$(sha256sum "$PDF_TMP_PATH" | awk '{ print $1 }')
-              # Essayer d'extraire un nom de base
-              URL_FILENAME=$(basename "$PDF_URL" | sed 's/\?.*//')
-              if [[ "$URL_FILENAME" == *.pdf ]]; then PDF_BASENAME="$URL_FILENAME"; else PDF_BASENAME="$PDF_HASH.pdf"; fi
-
-              # Ajoute l'objet JSON au tableau (utilise jq pour la sécurité)
-              matrix_json=$(echo '[]' | jq --arg type "url" --arg value "$PDF_URL" --arg hash "$PDF_HASH" --arg name "$PDF_BASENAME" '. + [{source_type: $type, source_value: $value, pdf_hash: $hash, pdf_basename: $name}]')
-              found_pdfs="true"
-              rm -rf "$TMP_DIR" # Nettoyage
-            else
-              echo "::error::Failed to download PDF from URL: $PDF_URL"
-              # Laisse matrix_json vide, found_pdfs à false
-            fi
-
-          # --- Cas 2: Fichiers locaux (sur push ou si reprocess=true) ---
-          elif [[ "${{ github.event_name }}" == "push" || "${{ github.event.inputs.reprocess }}" == "true" ]]; then
-             echo "Processing local PDF files from pdf/ directory..."
-             PDF_DIR="pdf"
-             temp_json="[]"
-             shopt -s nullglob
-             files=("$PDF_DIR"/*.pdf)
-             if [ ${#files[@]} -gt 0 ]; then
-                found_pdfs="true"
-                for pdf_file in "${files[@]}"; do
-                   # Utiliser des guillemets pour sha256sum
-                   PDF_HASH=$(sha256sum "$pdf_file" | awk '{ print $1 }')
-                   PDF_BASENAME=$(basename "$pdf_file")
-                   # Ajoute l'objet JSON (utilise jq)
-                   temp_json=$(echo "$temp_json" | jq --arg type "file" --arg value "$pdf_file" --arg hash "$PDF_HASH" --arg name "$PDF_BASENAME" '. + [{source_type: $type, source_value: $value, pdf_hash: $hash, pdf_basename: $name}]')
-                done
-                matrix_json="$temp_json"
-             else
-                echo "No PDF files found in $PDF_DIR."
-             fi
-          else
-             echo "No PDF source specified (no URL, not a push to pdf/, and reprocess=false)."
-          fi
-          # Compacte le JSON en une seule ligne avant l'exportation
-          compact_matrix_json=$(echo "${matrix_json}" | jq -c .)
-
-          echo "matrix=${compact_matrix_json}" >> $GITHUB_OUTPUT
-          echo "found_pdfs=${found_pdfs}" >> $GITHUB_OUTPUT
-
-          # Débogage
-          echo "Generated Matrix JSON (compact): ${compact_matrix_json}"
-          echo "Generated Matrix JSON (original): ${matrix_json}"
-          
-  # --- Job 2: Traiter chaque PDF identifié en parallèle (ou série) via matrice ---
-  process_pdfs_matrix:
-    name: Process PDF (${{ matrix.pdf_basename }})
-    needs: identify_pdfs
-    # Ne s'exécute que si le job précédent a trouvé des PDFs
-    if: needs.identify_pdfs.outputs.found_pdfs == 'true'
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/${{ github.repository }}:latest
-
-    strategy:
-      fail-fast: false # Continue les autres PDFs même si un échoue
-      # Définit la matrice en parsant la sortie JSON du job précédent
-      matrix: ${{ fromJson(needs.identify_pdfs.outputs.matrix) }}
-
-    steps:
-      - name: Checkout Repository # Nécessaire pour accéder aux fichiers locaux si type='file'
-        uses: actions/checkout@v4
-        if: matrix.source_type == 'file' # Seulement si on traite un fichier local
-
-      # -- Cache par PDF --
-      - name: Configure Cache Path for PDF
-        id: cache-pdf-path
-        run: echo "path=build/${{ matrix.pdf_hash }}" >> $GITHUB_OUTPUT
-
-      - name: Restore PDF Cache (${{ matrix.pdf_hash }})
-        id: cache-restore-pdf
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ steps.cache-pdf-path.outputs.path }}
-          # Clé spécifique à ce PDF
-          key: ${{ runner.os }}-pdf-${{ matrix.pdf_hash }}
-          restore-keys: | # Optionnel: restaurer une version précédente si exacte non trouvée
-            ${{ runner.os }}-pdf-${{ matrix.pdf_hash }}
-
-      # -- Traitement (si cache manquant ou si reprocess=true) --
-      - name: Process PDF (${{ matrix.pdf_basename }})
-        # Condition: pas de cache OU forcer le retraitement (seulement pour les fichiers locaux)
-        if: steps.cache-restore-pdf.outputs.cache-hit != 'true' || (github.event.inputs.reprocess == 'true' && matrix.source_type == 'file')
-        run: |
-          echo "Processing needed for ${{ matrix.pdf_basename }} (Hash: ${{ matrix.pdf_hash }})"
-          # Assure que le dossier de base existe pour le script
-          mkdir -p build
-          # Appel du script unifié avec les bonnes options
-          if [[ "${{ matrix.source_type }}" == "url" ]]; then
-            /app/scripts/process_pdf.sh -u "${{ matrix.source_value }}" -b "build"
-          elif [[ "${{ matrix.source_type }}" == "file" ]]; then
-            # S'assurer que le fichier est accessible (checkout fait conditionnellement plus haut)
-            if [ -f "${{ matrix.source_value }}" ]; then
-               /app/scripts/process_pdf.sh -f "${{ matrix.source_value }}" -b "build"
-            else
-               echo "::error::Local file ${{ matrix.source_value }} not found during processing!"
-               exit 1
-            fi
-          fi
-      - name: PDF Already Cached
-        if: steps.cache-restore-pdf.outputs.cache-hit == 'true' && !(github.event.inputs.reprocess == 'true' && matrix.source_type == 'file')
-        run: |
-          echo "Skipping processing for ${{ matrix.pdf_basename }} (Hash: ${{ matrix.pdf_hash }}) - Cache hit."
-
-      # -- Sauvegarde Cache par PDF --
-      - name: Save PDF Cache (${{ matrix.pdf_hash }})
-        # Sauvegarde seulement si on a traité (pas de cache hit ou reprocess=true)
-        if: steps.cache-restore-pdf.outputs.cache-hit != 'true' || (github.event.inputs.reprocess == 'true' && matrix.source_type == 'file')
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ steps.cache-pdf-path.outputs.path }}
-          key: ${{ steps.cache-restore-pdf.outputs.cache-primary-key || format('{0}-pdf-{1}', runner.os, matrix.pdf_hash) }}
-
-  # --- Job 3: Assembler le site final et uploader l'artefact ---
-  assemble_site:
-    name: Assemble Site and Upload Artifact
-    # Dépend de la matrice (attend que tous les PDFs soient traités/vérifiés)
-    needs: [identify_pdfs, process_pdfs_matrix]
-    # Ne s'exécute que si des PDFs ont été traités ou trouvés
-    if: needs.identify_pdfs.outputs.found_pdfs == 'true'
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/${{ github.repository }}:latest
-
-    steps:
-      - name: Checkout Repository # Pour les assets statiques potentiels
         uses: actions/checkout@v4
 
       - name: Clone Reveal.js
         uses: actions/checkout@v4
         with:
           repository: hakimel/reveal.js
-          path: reveal.js
+          path: reveal.js # Sera dans /github/workspace/reveal.js
 
+      # --- Configuration du Cache ---
+      - name: Configure Cache Path
+        id: cache-path
+        run: echo "path=build" >> $GITHUB_OUTPUT # Dans /github/workspace
+
+      - name: Restore Build Cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.cache-path.outputs.path }}
+          # Clé basée sur le hash des scripts (car ils sont DANS l'image)
+          # et le Dockerfile lui-même. Si l'un change, l'image change -> le cache est moins pertinent
+          # mais on peut garder une clé basée sur le runner pour une restauration partielle.
+          key: ${{ runner.os }}-build-cache-v2-${{ hashFiles('.github/scripts/**', 'Dockerfile') }}
+          restore-keys: |
+            ${{ runner.os }}-build-cache-v2-
+
+      # Préparer le dossier build et copier les assets (même si cache restauré)
       - name: Prepare Build Directory and Copy Assets
         run: |
           mkdir -p build/dist build/plugin
           cp -r reveal.js/dist/* build/dist/
           cp -r reveal.js/plugin/* build/plugin/
-          echo "Base build directory created and Reveal.js assets copied."
+          echo "Build directory structure created/ensured and Reveal.js assets copied."
+        shell: bash # Utilise bash explicitement
 
-      # -- Restaurer TOUS les caches des PDFs traités dans cette exécution --
-      # Nous devons réutiliser la matrice pour savoir quels caches restaurer
-      - name: Restore All Processed PDF Caches
-        uses: actions/cache/restore@v4
-        with:
-          # Chemin de base pour le cache
-          path: build/
-          # Clé non utilisée pour la restauration ici, on utilise restore-keys
-          key: ${{ runner.os }}-pdf-restore-marker-${{ github.run_id }} # Clé unique pour éviter conflit
-          # Restaure tous les caches individuels basés sur la matrice originale
-          restore-keys: |
-            ${{ runner.os }}-pdf- # Préfixe commun à tous les caches PDF
+      # Étape 1: Préparer la matrice des PDFs à traiter
+      - name: Prepare PDF Processing Matrix
+        id: prep_matrix
+        # Exécute le script DANS le conteneur
+        # Passe les inputs du workflow comme variables d'environnement
+        run: /app/scripts/prepare_matrix.sh
+        shell: bash # Utilise bash pour shopt dans le script
+        env:
+          # Transmet les infos nécessaires au script via l'environnement
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          INPUT_PDFURL: ${{ github.event.inputs.pdfUrl }}
 
+      # Étape 2: Traiter les PDFs listés dans la matrice
+      - name: Process PDFs from Matrix Data
+        # S'exécute seulement s'il y a des PDFs trouvés par l'étape précédente
+        if: steps.prep_matrix.outputs.found_pdfs == 'true'
+        # Exécute le script DANS le conteneur
+        # Passe la matrice compactée et le dossier build en arguments
+        run: /app/scripts/process_matrix_items.sh '${{ steps.prep_matrix.outputs.matrix }}' 'build'
+        shell: bash # Utilise bash
+
+      # Étape 3: Générer l'index principal
       - name: Generate Main Index HTML
-        run: |
-           echo "Checking restored content before generating index:"
-           ls -lha build/
-           # Exécute le script d'indexation
-           /app/scripts/generate_main_index.sh "build"
+        # Exécute le script DANS le conteneur
+        run: /app/scripts/generate_main_index.sh "build"
+        shell: bash # Utilise bash
 
-      - name: Upload Pages Artifact
+      # --- Sauvegarde du Cache ---
+      - name: Save Build Cache
+        uses: actions/cache/save@v4
+        # Sauvegarde toujours pour simplifier (si rien n'a changé, le cache sera identique)
+        with:
+          path: ${{ steps.cache-path.outputs.path }}
+          key: ${{ steps.cache-restore.outputs.cache-primary-key || format('{0}-build-cache-v2-{1}', runner.os, hashFiles('.github/scripts/**', 'Dockerfile')) }}
+
+      # Étape 4: Upload de l'artefact pour Pages
+      - name: Upload artifact for Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./build
+          path: ./build # Chemin relatif à /github/workspace
 
-  # --- Job 4: Déployer (inchangé) ---
+  # Job pour le déploiement (inchangé, dépend du job précédent)
   deploy:
-    name: Deploy to GitHub Pages
-    # Dépend de l'assemblage
-    needs: assemble_site
-    # Ne s'exécute que si l'assemblage a eu lieu (donc si des PDFs ont été trouvés)
-    if: needs.assemble_site.result == 'success' # Ou une condition basée sur needs.identify_pdfs.outputs.found_pdfs si besoin
+    needs: build_and_deploy # Doit dépendre du job qui génère l'artefact
     permissions:
       pages: write
       id-token: write
@@ -245,3 +126,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
