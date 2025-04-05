@@ -95,12 +95,16 @@ jobs:
           else
              echo "No PDF source specified (no URL, not a push to pdf/, and reprocess=false)."
           fi
+          # Compacte le JSON en une seule ligne avant l'exportation
+          compact_matrix_json=$(echo "${matrix_json}" | jq -c .)
 
-          # Exporte la matrice JSON et le flag found_pdfs
-          echo "matrix=${matrix_json}" >> $GITHUB_OUTPUT
+          echo "matrix=${compact_matrix_json}" >> $GITHUB_OUTPUT
           echo "found_pdfs=${found_pdfs}" >> $GITHUB_OUTPUT
-          echo "Generated Matrix JSON: ${matrix_json}" # Pour débogage
 
+          # Débogage
+          echo "Generated Matrix JSON (compact): ${compact_matrix_json}"
+          echo "Generated Matrix JSON (original): ${matrix_json}"
+          
   # --- Job 2: Traiter chaque PDF identifié en parallèle (ou série) via matrice ---
   process_pdfs_matrix:
     name: Process PDF (${{ matrix.pdf_basename }})
