@@ -87,8 +87,8 @@ fi
 # Compacte le JSON en une seule ligne avant l'exportation
 compact_matrix_json=$(echo "${matrix_json}" | jq -c .)
 
-echo "matrix=${compact_matrix_json}"
-echo "found_pdfs=${found_pdfs}"
+echo "matrix=${compact_matrix_json}" >> $GITHUB_OUTPUT
+echo "found_pdfs=${found_pdfs}" >> $GITHUB_OUTPUT
 
 # Débogage (visible dans les logs du workflow)
 echo "Debug: Generated Matrix JSON (compact): ${compact_matrix_json}"
